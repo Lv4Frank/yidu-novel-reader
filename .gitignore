@@ -1,0 +1,37 @@
+# ---- Build output ----
+build/
+tmpbuild/
+*.apk
+*.aab
+*.apk.idsig
+*.idsig
+*.sha256
+
+# ---- Signing secrets (NEVER commit) ----
+keystore/
+*.jks
+*.keystore
+*.p12
+
+# ---- Local toolchain (JDK / Android SDK, ~700MB) ----
+.tools/
+local.properties
+.gradle/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+*.iml
+Thumbs.db
+.DS_Store
+
+# ---- Development / test artifacts ----
+screenshots/
+ui.xml
+tools/mock_requests.log
+tools/qa-core/classes/
+tools/qa-core/*.log
+tools/lib/*.jar
+node_modules/
+__pycache__/
+*.log

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 摊开的书：左页 -->
+    <path
+        android:fillColor="#FDE68A"
+        android:pathData="M18,35 C28,28 42,28 52,34 L52,81 C42,75 28,75 18,82 Z" />
+    <!-- 右页 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,34 C66,28 80,28 90,35 L90,82 C80,75 66,75 56,81 Z" />
+    <!-- 书脊 -->
+    <path
+        android:fillColor="#B45309"
+        android:pathData="M52,34 L56,34 L56,81 L52,81 Z" />
+    <!-- 左页文字线 -->
+    <path
+        android:fillColor="#B45309"
+        android:pathData="M25,45 L46,44 L46,48 L25,49 Z M25,55 L43,54 L43,58 L25,59 Z M25,65 L46,64 L46,68 L25,69 Z" />
+    <!-- 右页文字线 -->
+    <path
+        android:fillColor="#D6CCBC"
+        android:pathData="M62,45 L83,46 L83,50 L62,49 Z M62,55 L79,56 L79,60 L62,59 Z" />
+    <!-- 译文标记气泡 -->
+    <path
+        android:fillColor="#0D9488"
+        android:pathData="M62,65 L84,66 L84,72 C84,76 81,78 78,78 L72,78 L66,84 L66,78 L64,78 C62,78 62,76 62,72 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M67,70 L79,71 L79,73 L67,72 Z" />
+</vector>
