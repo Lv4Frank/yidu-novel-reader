@@ -12,6 +12,13 @@ public final class PromptBuilder {
     public static String buildSystem(String basePrompt, String sourceLang, String targetLang,
                                      String glossary, boolean punctuationPreserve, int expectedCount,
                                      String chapterTitle) {
+        return buildSystem(basePrompt, sourceLang, targetLang, glossary, punctuationPreserve,
+                "", expectedCount, chapterTitle);
+    }
+
+    public static String buildSystem(String basePrompt, String sourceLang, String targetLang,
+                                     String glossary, boolean punctuationPreserve, String punctuationHint,
+                                     int expectedCount, String chapterTitle) {
         String source = Lang.promptName(sourceLang);
         String target = Lang.promptName(targetLang);
         String style = basePrompt == null ? "" : basePrompt.trim();
@@ -33,6 +40,10 @@ public final class PromptBuilder {
         }
         if (punctuationPreserve) {
             sb.append("标点要求：保留原文的标点符号写法与样式（引号、省略号、破折号、波浪号等），不要替换成目标语言的标点习惯；原文的省略号、书名号、间隔号等尽量沿用。\n");
+            if (punctuationHint != null && !punctuationHint.trim().isEmpty()) {
+                sb.append("原文实际使用的主要标点：").append(punctuationHint.trim())
+                        .append("。译文必须逐字沿用这些标点，不要改成目标语言的常见写法。\n");
+            }
         } else {
             sb.append("标点要求：按目标语言的标准标点习惯重新组织标点，使译文读起来自然。\n");
         }

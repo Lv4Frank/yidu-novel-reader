@@ -2,6 +2,7 @@ package com.yidu.novel.store;
 
 import android.content.Context;
 
+import com.yidu.novel.net.PunctuationPreserver;
 import com.yidu.novel.util.TextUtil;
 
 import org.json.JSONObject;
@@ -30,6 +31,7 @@ public final class TranslationStore {
     private final File file;
     private final Map<Integer, Item> items = new HashMap<>();
     private int journalLines = 0;
+    private boolean preservePunctuation;
 
     public static class Item {
         public String text = "";
@@ -96,11 +98,22 @@ public final class TranslationStore {
         Item item = items.get(blockIndex);
         if (item == null) return null;
         if (originalText != null && item.hash != hash(originalText)) return null;
-        return item.text;
+        String text = item.text;
+        if (preservePunctuation && originalText != null && !text.isEmpty()) {
+            // 按当前开关动态修正：打开开关后，之前已缓存的译文也能立即生效。
+            text = PunctuationPreserver.apply(originalText, text);
+        }
+        return text;
     }
 
     public synchronized boolean has(int blockIndex, String originalText) {
-        return get(blockIndex, originalText) != null;
+        Item item = items.get(blockIndex);
+        if (item == null) return false;
+        return originalText == null || item.hash == hash(originalText);
+    }
+
+    public synchronized void setPunctuationPreserve(boolean value) {
+        preservePunctuation = value;
     }
 
     public synchronized void put(int blockIndex, String originalText, String translation) {

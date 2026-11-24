@@ -7,6 +7,8 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -18,14 +20,19 @@ import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
 import android.view.Gravity;
-import android.view.KeyEvent;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
+import android.widget.AbsListView;
+import android.widget.BaseAdapter;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -50,6 +57,7 @@ import java.io.File;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -79,6 +87,13 @@ public class ReaderActivity extends Activity {
     private ScrollView bilingualScroll;
     private LinearLayout bilingualRows;
     private TextView bilingualStatus;
+    private LinearLayout freeContainer;
+    private TextView freeStatus;
+    private ListView freeList;
+    private FreeBrowseAdapter freeAdapter;
+    private boolean freeNeedsScroll = true;
+    private String freeNote = "";
+    private boolean pageAnimating;
     private TextView chapterLabel;
     private TextView pageLabel;
     private TextView prevLabel;
@@ -127,6 +142,8 @@ public class ReaderActivity extends Activity {
     });
     private Runnable pendingPaginate;
     private Runnable pendingAuto;
+    private Runnable scheduledFreeTranslate;
+    private Runnable freeRefreshRunnable;
     private String styleSignature = "";
     private boolean initialHintShown;
 
@@ -166,6 +183,7 @@ public class ReaderActivity extends Activity {
             return;
         }
         translations = TranslationStore.open(this, book.id);
+        translations.setPunctuationPreserve(store.isPunctuationPreserve());
         int startBlock = getIntent().getIntExtra("start_block", -1);
         if (startBlock >= 0) book.lastBlock = startBlock;
 
@@ -259,31 +277,19 @@ public class ReaderActivity extends Activity {
         bilingualScroll.setOnTouchListener(new View.OnTouchListener() {
             float downX;
             float downY;
-            long downAt;
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 if (event.getAction() == MotionEvent.ACTION_DOWN) {
                     downX = event.getX();
                     downY = event.getY();
-                    downAt = System.currentTimeMillis();
                 } else if (event.getAction() == MotionEvent.ACTION_UP) {
                     float dx = event.getX() - downX;
                     float dy = event.getY() - downY;
-                    String mode = store.getPageTurnMode();
-                    if (Math.abs(dx) > Ui.dp(ReaderActivity.this, 52)
-                            && Math.abs(dx) > Math.abs(dy) * 1.5f) {
-                        if ("swipe".equals(mode) || "tap".equals(mode)) {
-                            if (dx < 0) nextPage();
-                            else prevPage();
-                        }
-                    } else if (Math.abs(dx) < Ui.dp(ReaderActivity.this, 14)
-                            && Math.abs(dy) < Ui.dp(ReaderActivity.this, 14)
-                            && System.currentTimeMillis() - downAt < 450
-                            && "tap".equals(mode)) {
-                        float width = v.getWidth();
-                        if (event.getX() < width / 3f) prevPage();
-                        else if (event.getX() > width * 2f / 3f) nextPage();
+                    if (Math.abs(dx) > Ui.dp(ReaderActivity.this, 55)
+                            && Math.abs(dx) > Math.abs(dy) * 1.35f) {
+                        if (dx < 0) nextPage();
+                        else prevPage();
                     }
                 }
                 return false;
@@ -291,6 +297,44 @@ public class ReaderActivity extends Activity {
         });
         readArea.addView(bilingualContainer, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        freeContainer = Ui.vertical(this);
+        freeContainer.setVisibility(View.GONE);
+        freeStatus = Ui.text(this, "", 10.5f, Ui.MUTED, false);
+        freeStatus.setPadding(0, 0, 0, Ui.dp(this, 8));
+        freeStatus.setMaxLines(3);
+        freeContainer.addView(freeStatus, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        freeList = new ListView(this);
+        freeList.setDivider(null);
+        freeList.setDividerHeight(0);
+        freeList.setClipToPadding(false);
+        freeList.setPadding(0, 0, 0, Ui.dp(this, 16));
+        freeList.setBackgroundColor(store.getBgColor());
+        freeList.setVerticalScrollBarEnabled(false);
+        freeList.setOnScrollListener(new AbsListView.OnScrollListener() {
+            @Override
+            public void onScrollStateChanged(AbsListView view, int scrollState) {
+                if (scrollState == AbsListView.OnScrollListener.SCROLL_STATE_IDLE) {
+                    onFreeBrowseIdle();
+                }
+            }
+
+            @Override
+            public void onScroll(AbsListView view, int firstVisibleItem, int visibleItemCount, int totalItemCount) {
+            }
+        });
+        freeList.setOnItemLongClickListener((parent, view, position, id) -> {
+            if (freeAdapter == null) return false;
+            int paragraphIndex = freeAdapter.paragraphAt(position);
+            showFreeParagraphActions(paragraphIndex);
+            return true;
+        });
+        freeContainer.addView(freeList, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        readArea.addView(freeContainer, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         pageColumn.addView(readArea, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         applyModeVisibility();
@@ -326,6 +370,7 @@ public class ReaderActivity extends Activity {
             float downX;
             float downY;
             long downAt;
+            boolean horizontalGesture;
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
@@ -333,32 +378,45 @@ public class ReaderActivity extends Activity {
                     downX = event.getX();
                     downY = event.getY();
                     downAt = System.currentTimeMillis();
+                    horizontalGesture = false;
+                    return true;
+                }
+                if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                    float dx = event.getX() - downX;
+                    float dy = event.getY() - downY;
+                    if (!pageAnimating && !isFreeBrowse()
+                            && Math.abs(dx) > Ui.dp(ReaderActivity.this, 10)
+                            && Math.abs(dx) > Math.abs(dy) * 1.15f) {
+                        horizontalGesture = true;
+                        readArea.setTranslationX(dx * 0.22f);
+                        readArea.setAlpha(0.97f);
+                    }
+                    return true;
+                }
+                if (event.getAction() == MotionEvent.ACTION_CANCEL) {
+                    cancelPageDrag();
                     return true;
                 }
                 if (event.getAction() == MotionEvent.ACTION_UP) {
                     float dx = event.getX() - downX;
                     float dy = event.getY() - downY;
                     long duration = System.currentTimeMillis() - downAt;
-                    String mode = store.getPageTurnMode();
-                    if (Math.abs(dx) > Ui.dp(ReaderActivity.this, 46)
-                            && Math.abs(dx) > Math.abs(dy) * 1.4f) {
-                        if ("swipe".equals(mode)) {
-                            if (dx < 0) nextPage();
+                    if (!isFreeBrowse() && (horizontalGesture
+                            || (Math.abs(dx) > Ui.dp(ReaderActivity.this, 55)
+                            && Math.abs(dx) > Math.abs(dy) * 1.3f))) {
+                        boolean next = dx < 0;
+                        cancelPageDrag();
+                        if (Math.abs(dx) >= Ui.dp(ReaderActivity.this, 55)) {
+                            if (next) nextPage();
                             else prevPage();
                         }
                         return true;
                     }
+                    cancelPageDrag();
                     if (Math.abs(dx) < Ui.dp(ReaderActivity.this, 16)
                             && Math.abs(dy) < Ui.dp(ReaderActivity.this, 16)
                             && duration < 500) {
-                        if ("tap".equals(mode)) {
-                            float width = v.getWidth();
-                            if (event.getX() < width / 3f) prevPage();
-                            else if (event.getX() > width * 2f / 3f) nextPage();
-                            else toggleBars();
-                        } else {
-                            toggleBars();
-                        }
+                        toggleBars();
                     }
                     return true;
                 }
@@ -523,6 +581,11 @@ public class ReaderActivity extends Activity {
 
     private void paginate() {
         if (novel == null || pageText == null) return;
+        if (isFreeBrowse()) {
+            // 自由浏览不需要分页，直接渲染连续列表，避免大文件初次分页卡顿
+            setupFreeBrowse();
+            return;
+        }
         int width = pageText.getWidth();
         int height = pageText.getHeight();
         if (width <= 0 || height <= 0) {
@@ -651,6 +714,11 @@ public class ReaderActivity extends Activity {
     }
 
     private void renderPage(boolean resetPanel) {
+        if (isFreeBrowse()) {
+            updateFreeLabels();
+            updateFreeStatus();
+            return;
+        }
         if (pages.isEmpty()) return;
         Page page = pages.get(pageIndex);
         currentBlock = page.startBlock;
@@ -672,11 +740,200 @@ public class ReaderActivity extends Activity {
         return store.isBilingualReading();
     }
 
+    private boolean isFreeBrowse() {
+        return store.isFreeBrowseReading();
+    }
+
     private void applyModeVisibility() {
         if (pageText == null || bilingualContainer == null) return;
         boolean bilingual = isBilingual();
-        pageText.setVisibility(bilingual ? View.GONE : View.VISIBLE);
+        boolean free = isFreeBrowse();
+        pageText.setVisibility(!bilingual && !free ? View.VISIBLE : View.GONE);
         bilingualContainer.setVisibility(bilingual ? View.VISIBLE : View.GONE);
+        if (freeContainer != null) freeContainer.setVisibility(free ? View.VISIBLE : View.GONE);
+        if (prevLabel != null) prevLabel.setVisibility(free ? View.GONE : View.VISIBLE);
+        if (nextLabel != null) nextLabel.setVisibility(free ? View.GONE : View.VISIBLE);
+        if (free && freeStatus != null) freeStatus.setTextColor(Ui.alpha(store.getTextColor(), 170));
+    }
+
+    /** 当前翻译范围：分页模式为当前页；自由浏览为当前屏幕可见段落。 */
+    private List<Integer> currentReadingBlocks() {
+        return isFreeBrowse() ? freeVisibleBlocks() : pageBlocks();
+    }
+
+    // ---------------- 自由浏览（连续滚动） ----------------
+
+    private void setupFreeBrowse() {
+        if (freeList == null || novel == null) return;
+        if (freeAdapter == null) {
+            freeAdapter = new FreeBrowseAdapter();
+            freeList.setAdapter(freeAdapter);
+        } else {
+            freeAdapter.notifyDataSetChanged();
+        }
+        freeList.setBackgroundColor(store.getBgColor());
+        applyModeVisibility();
+        updateFreeLabels();
+        updateFreeStatus();
+        if (freeNeedsScroll) {
+            freeNeedsScroll = false;
+            final int target = freeRowForBlock(currentBlock);
+            freeList.post(() -> {
+                if (freeAdapter != null && freeAdapter.getCount() > 0) {
+                    freeList.setSelection(Math.max(0, Math.min(target, freeAdapter.getCount() - 1)));
+                }
+                updateFreeLabels();
+                updateFreeStatus();
+                updateBottomButtons();
+                main.postDelayed(ReaderActivity.this::onFreeBrowseIdle, 450);
+            });
+        } else {
+            updateBottomButtons();
+            scheduleFreeAutoTranslate(300);
+        }
+    }
+
+    private int freeRowForBlock(int blockIndex) {
+        if (novel == null || novel.blocks.isEmpty()) return 0;
+        int safe = Math.max(0, Math.min(novel.blocks.size() - 1, blockIndex));
+        int paragraphIndex = novel.blocks.get(safe).paragraphIndex;
+        return freeAdapter == null ? 0 : freeAdapter.rowOfParagraph(paragraphIndex);
+    }
+
+    private List<Integer> freeVisibleBlocks() {
+        List<Integer> result = new ArrayList<>();
+        if (!isFreeBrowse() || freeList == null || freeAdapter == null || freeAdapter.getCount() == 0) {
+            return result;
+        }
+        int first = Math.max(0, freeList.getFirstVisiblePosition());
+        int last = Math.min(freeAdapter.getCount() - 1, freeList.getLastVisiblePosition());
+        if (last < first) last = first;
+        LinkedHashSet<Integer> set = new LinkedHashSet<>();
+        for (int position = first; position <= last; position++) {
+            int paragraphIndex = freeAdapter.paragraphAt(position);
+            for (Integer blockIndex : novel.blockIndexesOfParagraph(paragraphIndex)) {
+                set.add(blockIndex);
+                if (set.size() >= 48) break;
+            }
+            if (set.size() >= 48) break;
+        }
+        result.addAll(set);
+        return result;
+    }
+
+    private void captureFreePosition() {
+        if (!isFreeBrowse() || freeList == null || freeAdapter == null || freeAdapter.getCount() == 0) return;
+        int position = Math.max(0, Math.min(freeAdapter.getCount() - 1, freeList.getFirstVisiblePosition()));
+        int paragraphIndex = freeAdapter.paragraphAt(position);
+        int block = novel.firstBlockOfParagraph(paragraphIndex);
+        if (block >= 0) {
+            currentBlock = block;
+            chapterIndex = novel.chapterOfBlock(block);
+            chapter = novel.chapter(chapterIndex);
+        }
+        saveProgress();
+    }
+
+    private void onFreeBrowseIdle() {
+        if (!isFreeBrowse()) return;
+        captureFreePosition();
+        if (!translating) freeNote = "";
+        updateFreeLabels();
+        updateFreeStatus();
+        updateBottomButtons();
+        scheduleFreeAutoTranslate(260);
+    }
+
+    private String forFreeNote(String note) {
+        if (note == null) return "";
+        return note.replace("本页", "当前屏幕");
+    }
+
+    private void scheduleFreeAutoTranslate(long delay) {
+        if (!isFreeBrowse() || !store.isAutoTranslate() || translating) return;
+        if (scheduledFreeTranslate != null) main.removeCallbacks(scheduledFreeTranslate);
+        scheduledFreeTranslate = () -> {
+            if (!isFreeBrowse() || translating) return;
+            if (!store.isAutoTranslate()) return;
+            List<Integer> blocks = currentReadingBlocks();
+            if (blocks.isEmpty()) return;
+            int pending = 0;
+            for (Integer block : blocks) {
+                if (!translations.has(block, novel.blocks.get(block).text)) pending++;
+            }
+            if (pending > 0) translatePage(false, true);
+        };
+        main.postDelayed(scheduledFreeTranslate, delay);
+    }
+
+    private void updateFreeLabels() {
+        if (!isFreeBrowse() || pageLabel == null) return;
+        int percent = novel.blocks.isEmpty() ? 0
+                : Math.max(0, Math.min(100, novel.percentOfBlock(currentBlock)));
+        if (chapterLabel != null) chapterLabel.setText("自由浏览 · 无章节");
+        pageLabel.setText("全书 " + percent + "%");
+    }
+
+    private void updateFreeStatus() {
+        if (freeStatus == null || !isFreeBrowse()) return;
+        List<Integer> blocks = currentReadingBlocks();
+        int done = 0;
+        for (Integer block : blocks) {
+            if (translations.has(block, novel.blocks.get(block).text)) done++;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("自由浏览 · 当前屏幕已译 ").append(done).append("/").append(blocks.size()).append(" 段");
+        if (translating) sb.append(" · 翻译中");
+        if (freeNote != null && !freeNote.isEmpty()) sb.append(" · ").append(freeNote);
+        freeStatus.setText(sb.toString());
+    }
+
+    private void scheduleFreeRefresh() {
+        if (freeRefreshRunnable == null) {
+            freeRefreshRunnable = () -> {
+                if (!isFreeBrowse() || freeAdapter == null) return;
+                freeAdapter.notifyDataSetChanged();
+                updateFreeStatus();
+            };
+        }
+        main.removeCallbacks(freeRefreshRunnable);
+        main.postDelayed(freeRefreshRunnable, 120);
+    }
+
+    private void showFreeParagraphActions(int paragraphIndex) {
+        List<Integer> blocks = novel.blockIndexesOfParagraph(paragraphIndex);
+        if (blocks.isEmpty()) return;
+        boolean hasTranslation = false;
+        for (Integer block : blocks) {
+            if (translations.has(block, novel.blocks.get(block).text)) {
+                hasTranslation = true;
+                break;
+            }
+        }
+        final boolean hasTrans = hasTranslation;
+        List<String> items = new ArrayList<>();
+        items.add("翻译此段");
+        if (hasTrans) items.add("重翻此段");
+        if (hasTrans) items.add("复制此段译文");
+        Ui.sheet(this, "第 " + (paragraphIndex + 1) + " 段", items.toArray(new String[0]), index -> {
+            int i = 0;
+            if (index == i++) {
+                startTranslation(blocks, false, true);
+            } else if (hasTrans && index == i++) {
+                startTranslation(blocks, true, true);
+            } else if (hasTrans) {
+                StringBuilder sb = new StringBuilder();
+                for (Integer block : blocks) {
+                    String value = translations.get(block, novel.blocks.get(block).text);
+                    if (value != null) sb.append(value);
+                }
+                ClipboardManager manager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (manager != null) {
+                    manager.setPrimaryClip(ClipData.newPlainText("本段译文", sb.toString()));
+                    Ui.toast(this, "本段译文已复制");
+                }
+            }
+        });
     }
 
     /** 双语对照：按段落渲染“原文在上、译文在下”，译文随流式翻译实时回填。 */
@@ -860,7 +1117,11 @@ public class ReaderActivity extends Activity {
     }
 
     private void updatePageLabels() {
-        if (chapterLabel == null) return;
+        if (isFreeBrowse()) {
+            updateFreeLabels();
+            return;
+        }
+        if (chapterLabel == null || pages.isEmpty()) return;
         String title = chapter == null ? "" : chapter.title;
         chapterLabel.setText(title);
         int percent = novel.percentOfBlock(currentBlock);
@@ -927,7 +1188,7 @@ public class ReaderActivity extends Activity {
     }
 
     private boolean pageAllTranslated() {
-        for (Integer index : pageBlocks()) {
+        for (Integer index : currentReadingBlocks()) {
             if (!translations.has(index, novel.blocks.get(index).text)) return false;
         }
         return true;
@@ -935,10 +1196,17 @@ public class ReaderActivity extends Activity {
 
     private int pageTranslatedCount() {
         int count = 0;
-        for (Integer index : pageBlocks()) {
+        for (Integer index : currentReadingBlocks()) {
             if (translations.has(index, novel.blocks.get(index).text)) count++;
         }
         return count;
+    }
+
+    private boolean blocksAllTranslated(List<Integer> blocks) {
+        for (Integer index : blocks) {
+            if (!translations.has(index, novel.blocks.get(index).text)) return false;
+        }
+        return true;
     }
 
     private void onTranslateClick() {
@@ -948,6 +1216,10 @@ public class ReaderActivity extends Activity {
             translateSession++;
             updateBottomButtons();
             panelStatus.setText("已停止翻译，已完成内容已保留");
+            if (isFreeBrowse()) {
+                freeNote = "已停止翻译";
+                updateFreeStatus();
+            }
             Ui.toast(this, "已停止翻译");
             return;
         }
@@ -959,8 +1231,30 @@ public class ReaderActivity extends Activity {
     }
 
     private void translatePage(boolean force, boolean fromAuto) {
-        if (novel == null || pages.isEmpty()) return;
+        if (novel == null) return;
+        if (isFreeBrowse()) {
+            List<Integer> blocks = freeVisibleBlocks();
+            if (blocks.isEmpty()) {
+                Ui.toast(this, "当前屏幕没有可翻译的内容");
+                return;
+            }
+            startTranslation(blocks, force, fromAuto);
+            return;
+        }
+        if (pages.isEmpty()) return;
+        List<Integer> blocks = pageBlocks();
+        if (blocks.isEmpty()) {
+            Ui.toast(this, "本页没有可翻译的内容");
+            return;
+        }
+        startTranslation(blocks, force, fromAuto);
+    }
+
+    /** 真正的翻译入口：分页模式传当前页块，自由浏览传当前屏幕可见块。 */
+    private void startTranslation(List<Integer> requestedBlocks, boolean force, boolean fromAuto) {
+        if (novel == null || requestedBlocks == null || requestedBlocks.isEmpty()) return;
         if (translating) {
+            if (fromAuto) return;
             translatePageCancel();
             return;
         }
@@ -981,8 +1275,18 @@ public class ReaderActivity extends Activity {
             Ui.toast(this, "没有可用的翻译提示词，请先到设置中检查");
             return;
         }
-        if (!force && pageAllTranslated()) {
-            if (isBilingual()) {
+        LinkedHashSet<Integer> validSet = new LinkedHashSet<>();
+        for (Integer index : requestedBlocks) {
+            if (index == null || index < 0 || index >= novel.blocks.size()) continue;
+            if (novel.blocks.get(index).text == null || novel.blocks.get(index).text.trim().isEmpty()) continue;
+            validSet.add(index);
+        }
+        List<Integer> blocks = new ArrayList<>(validSet);
+        if (blocks.isEmpty()) return;
+        if (!force && blocksAllTranslated(blocks)) {
+            if (isFreeBrowse()) {
+                Ui.toast(this, "当前屏幕已经翻译过了，可用「重翻」重新翻译");
+            } else if (isBilingual()) {
                 Ui.toast(this, "本页已经翻译过了，可用「重翻」重新翻译");
             } else {
                 openPanel();
@@ -990,15 +1294,13 @@ public class ReaderActivity extends Activity {
             }
             return;
         }
-        List<Integer> blocks = pageBlocks();
-        if (blocks.isEmpty()) {
-            Ui.toast(this, "本页没有可翻译的内容");
-            return;
-        }
         if (force) {
-            // 先同步清掉旧译文，避免面板仍显示上一轮结果
             for (Integer index : blocks) translations.delete(index);
             if (isBilingual()) renderBilingualPage();
+            if (isFreeBrowse() && freeAdapter != null) {
+                freeAdapter.notifyDataSetChanged();
+                updateFreeStatus();
+            }
         }
         if (engine != null) engine.shutdown();
         final int session = ++translateSession;
@@ -1010,6 +1312,8 @@ public class ReaderActivity extends Activity {
                     panelStatus.setText(pendingBlocks == 0 ? "本页译文已存在" : "准备翻译 " + pendingBlocks + " 段…");
                     bilingualNote = pendingBlocks == 0 ? "本页译文已存在" : "准备翻译 " + pendingBlocks + " 段…";
                     updateBilingualStatus();
+                    freeNote = forFreeNote(bilingualNote);
+                    updateFreeStatus();
                 });
             }
 
@@ -1020,6 +1324,8 @@ public class ReaderActivity extends Activity {
                     panelStatus.setText(status);
                     bilingualNote = status;
                     updateBilingualStatus();
+                    freeNote = forFreeNote(status);
+                    updateFreeStatus();
                 });
             }
 
@@ -1034,6 +1340,7 @@ public class ReaderActivity extends Activity {
                         view.setText(text + "▍");
                     }
                     refreshBilingualBlock(blockIndex);
+                    if (isFreeBrowse()) scheduleFreeRefresh();
                 });
             }
 
@@ -1050,6 +1357,7 @@ public class ReaderActivity extends Activity {
                     updatePanelStats();
                     updateBottomButtons();
                     refreshBilingualBlock(blockIndex);
+                    if (isFreeBrowse()) scheduleFreeRefresh();
                 });
             }
 
@@ -1060,6 +1368,8 @@ public class ReaderActivity extends Activity {
                     panelStatus.setText("翻译中… " + done + " / " + total + " 段");
                     bilingualNote = "翻译中… " + done + " / " + total + " 段";
                     updateBilingualStatus();
+                    freeNote = forFreeNote(bilingualNote);
+                    updateFreeStatus();
                 });
             }
 
@@ -1075,19 +1385,30 @@ public class ReaderActivity extends Activity {
                     panelStatus.setText(note);
                     bilingualNote = note;
                     refreshAllBilingualRows();
+                    if (isFreeBrowse()) {
+                        freeNote = forFreeNote(note);
+                        if (freeAdapter != null) freeAdapter.notifyDataSetChanged();
+                        updateFreeStatus();
+                        scheduleFreeAutoTranslate(300);
+                    }
                     if (failed > 0 && !cancelled) Ui.toast(ReaderActivity.this, note);
                 });
             }
         });
         translating = true;
-        boolean keepPanelHidden = isBilingual() || (fromAuto && panelUserClosed);
+        boolean keepPanelHidden = isFreeBrowse() || isBilingual() || pageAnimating
+                || (fromAuto && panelUserClosed);
         openPanelIfNeeded(!keepPanelHidden);
-        renderPanelCards();
+        if (!isFreeBrowse()) {
+            renderPanelCards();
+        }
         updateBottomButtons();
         panelStatus.setText("正在连接模型…");
-        if (isBilingual()) {
-            bilingualNote = "正在连接模型…";
-            updateBilingualStatus();
+        bilingualNote = "正在连接模型…";
+        updateBilingualStatus();
+        if (isFreeBrowse()) {
+            freeNote = "正在连接模型…";
+            updateFreeStatus();
         }
         engine.start(blocks, force);
     }
@@ -1118,6 +1439,10 @@ public class ReaderActivity extends Activity {
     }
 
     private void scheduleAutoTranslate() {
+        if (isFreeBrowse()) {
+            scheduleFreeAutoTranslate(260);
+            return;
+        }
         if (!store.isAutoTranslate() || translating) return;
         if (pages.isEmpty()) return;
         if (pageAllTranslated()) {
@@ -1151,9 +1476,10 @@ public class ReaderActivity extends Activity {
 
     private void updatePanelStats() {
         if (panelTitle == null) return;
-        int count = pageBlocks().size();
+        List<Integer> blocks = currentReadingBlocks();
+        int count = blocks.size();
         int done = pageTranslatedCount();
-        panelTitle.setText("本页译文 · " + done + "/" + count + " 段");
+        panelTitle.setText((isFreeBrowse() ? "当前屏幕译文" : "本页译文") + " · " + done + "/" + count + " 段");
         emptyPanel.setVisibility(count > 0 && done == 0 && !translating ? View.GONE : View.GONE);
     }
 
@@ -1161,9 +1487,10 @@ public class ReaderActivity extends Activity {
         if (cardsBox == null) return;
         cardViews.clear();
         cardsBox.removeAllViews();
-        List<Integer> blocks = pageBlocks();
+        List<Integer> blocks = currentReadingBlocks();
         if (blocks.isEmpty()) {
-            TextView empty = Ui.text(this, "本页没有可翻译的段落", 13, Ui.MUTED, false);
+            TextView empty = Ui.text(this, isFreeBrowse() ? "当前屏幕没有可翻译的段落" : "本页没有可翻译的段落",
+                    13, Ui.MUTED, false);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(0, Ui.dp(this, 24), 0, Ui.dp(this, 24));
             cardsBox.addView(empty);
@@ -1227,6 +1554,10 @@ public class ReaderActivity extends Activity {
                         view.setTextColor(store.getTextColor());
                     }
                     if (isBilingual()) refreshBilingualBlock(blockIndex);
+                    if (isFreeBrowse() && freeAdapter != null) {
+                        freeAdapter.notifyDataSetChanged();
+                        updateFreeStatus();
+                    }
                     updatePanelStats();
                     updateBottomButtons();
                     Ui.toast(this, "译文已保存");
@@ -1243,20 +1574,143 @@ public class ReaderActivity extends Activity {
 
     private void copyPageTranslation() {
         StringBuilder sb = new StringBuilder();
-        for (Integer index : pageBlocks()) {
+        for (Integer index : currentReadingBlocks()) {
             String value = translations.get(index, novel.blocks.get(index).text);
             if (value != null) sb.append(value).append('\n').append('\n');
             else sb.append(novel.blocks.get(index).text).append('\n').append('\n');
         }
         ClipboardManager manager = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (manager == null) return;
-        manager.setPrimaryClip(ClipData.newPlainText("本页译文", sb.toString().trim()));
-        Ui.toast(this, "本页译文已复制");
+        String label = isFreeBrowse() ? "当前屏幕译文" : "本页译文";
+        manager.setPrimaryClip(ClipData.newPlainText(label, sb.toString().trim()));
+        Ui.toast(this, label + "已复制");
     }
 
     // ---------------- 页面操作 ----------------
 
+    private void cancelPageDrag() {
+        if (readArea == null) return;
+        readArea.animate().translationX(0f).alpha(1f).setDuration(140)
+                .setInterpolator(new DecelerateInterpolator()).start();
+    }
+
+    /** 左右滑动翻页：左滑下一页，右滑上一页。 */
     private void nextPage() {
+        turnPage(1);
+    }
+
+    private void prevPage() {
+        turnPage(-1);
+    }
+
+    private void turnPage(int direction) {
+        if (pageAnimating || isFreeBrowse() || pages.isEmpty()) return;
+        boolean atFirst = pageIndex <= 0 && chapterIndex <= 0;
+        boolean atLast = pageIndex >= pages.size() - 1 && chapterIndex + 1 >= novel.chapters.size();
+        if (direction > 0 && atLast) {
+            Ui.toast(this, "已经是全书最后一页");
+            return;
+        }
+        if (direction < 0 && atFirst) {
+            Ui.toast(this, "已经是全书第一页");
+            return;
+        }
+        int width = readArea.getWidth();
+        int height = readArea.getHeight();
+        if (width <= 0 || height <= 0) {
+            if (direction > 0) rawNextPage();
+            else rawPrevPage();
+            return;
+        }
+        readArea.animate().cancel();
+        readArea.setTranslationX(0f);
+        readArea.setAlpha(1f);
+        Bitmap snapshot;
+        try {
+            snapshot = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            readArea.draw(new Canvas(snapshot));
+        } catch (Throwable e) {
+            if (direction > 0) rawNextPage();
+            else rawPrevPage();
+            return;
+        }
+        final Bitmap bitmap = snapshot;
+        FrameLayout animLayer = new FrameLayout(this);
+        ImageView oldPage = new ImageView(this);
+        oldPage.setImageBitmap(bitmap);
+        oldPage.setScaleType(ImageView.ScaleType.FIT_XY);
+        animLayer.addView(oldPage, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        View shadow = new View(this);
+        GradientDrawable shadowDrawable = new GradientDrawable(
+                direction > 0 ? GradientDrawable.Orientation.LEFT_RIGHT
+                        : GradientDrawable.Orientation.RIGHT_LEFT,
+                new int[]{0x00000000, 0x55000000});
+        shadow.setBackground(shadowDrawable);
+        FrameLayout.LayoutParams sp = new FrameLayout.LayoutParams(
+                Ui.dp(this, 34), ViewGroup.LayoutParams.MATCH_PARENT);
+        sp.gravity = direction > 0 ? Gravity.END : Gravity.START;
+        animLayer.addView(shadow, sp);
+        animLayer.setClipChildren(true);
+        readArea.addView(animLayer, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        pageAnimating = true;
+        if (direction > 0) rawNextPage();
+        else rawPrevPage();
+
+        View incoming = isBilingual() ? bilingualContainer : pageText;
+        if (incoming == null || incoming.getVisibility() != View.VISIBLE) {
+            readArea.removeView(animLayer);
+            bitmap.recycle();
+            pageAnimating = false;
+            return;
+        }
+        float density = getResources().getDisplayMetrics().density;
+        float camera = 9000f * density;
+        animLayer.setCameraDistance(camera);
+        incoming.setCameraDistance(camera);
+        animLayer.setPivotX(direction > 0 ? 0f : width);
+        animLayer.setPivotY(height / 2f);
+        incoming.setPivotX(direction > 0 ? width : 0f);
+        incoming.setPivotY(height / 2f);
+        incoming.setTranslationX(direction * width);
+        incoming.setRotationY(direction > 0 ? 7f : -7f);
+        incoming.setAlpha(0.82f);
+        animLayer.setRotationY(direction > 0 ? -4f : 4f);
+        final boolean[] cleaned = {false};
+        final Runnable cleanup = () -> {
+            if (cleaned[0]) return;
+            cleaned[0] = true;
+            if (animLayer.getParent() != null) readArea.removeView(animLayer);
+            bitmap.recycle();
+            incoming.setTranslationX(0f);
+            incoming.setRotationY(0f);
+            incoming.setAlpha(1f);
+            pageAnimating = false;
+        };
+        animLayer.animate()
+                .translationX(-direction * width)
+                .rotationY(direction > 0 ? -12f : 12f)
+                .setDuration(320)
+                .setInterpolator(new DecelerateInterpolator(1.7f))
+                .withEndAction(cleanup)
+                .start();
+        incoming.animate()
+                .translationX(0f)
+                .rotationY(0f)
+                .alpha(1f)
+                .setDuration(320)
+                .setInterpolator(new DecelerateInterpolator(1.7f))
+                .start();
+        // 系统关闭动画（Animator duration scale = 0）或异常情况下兜底恢复
+        main.postDelayed(() -> {
+            if (pageAnimating) cleanup.run();
+        }, 700);
+        readArea.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+    }
+
+    private void rawNextPage() {
         if (pages.isEmpty()) return;
         if (translating) translatePageCancel();
         if (pageIndex < pages.size() - 1) {
@@ -1264,13 +1718,10 @@ public class ReaderActivity extends Activity {
             renderPage(true);
         } else if (chapterIndex + 1 < novel.chapters.size()) {
             jumpChapter(chapterIndex + 1);
-            Ui.toast(this, "进入下一章");
-        } else {
-            Ui.toast(this, "已经是全书最后一页");
         }
     }
 
-    private void prevPage() {
+    private void rawPrevPage() {
         if (pages.isEmpty()) return;
         if (translating) translatePageCancel();
         if (pageIndex > 0) {
@@ -1278,10 +1729,8 @@ public class ReaderActivity extends Activity {
             renderPage(true);
         } else if (chapterIndex > 0) {
             jumpChapter(chapterIndex - 1);
-            pageIndex = pages.size() - 1;
+            if (!pages.isEmpty()) pageIndex = pages.size() - 1;
             renderPage(true);
-        } else {
-            Ui.toast(this, "已经是全书第一页");
         }
     }
 
@@ -1292,7 +1741,12 @@ public class ReaderActivity extends Activity {
         chapterIndex = target.index;
         chapter = target;
         currentBlock = target.startBlock;
-        paginate();
+        if (isFreeBrowse()) {
+            freeNeedsScroll = true;
+            setupFreeBrowse();
+        } else {
+            paginate();
+        }
     }
 
     private void toggleBars() {
@@ -1325,6 +1779,7 @@ public class ReaderActivity extends Activity {
     }
 
     private void toggleBookmark() {
+        if (isFreeBrowse()) captureFreePosition();
         Bookmark existing = store.findBookmark(book.id, currentBlock);
         if (existing != null) {
             store.deleteBookmark(existing.id);
@@ -1335,10 +1790,17 @@ public class ReaderActivity extends Activity {
             bookmark.bookTitle = book.title;
             bookmark.blockIndex = currentBlock;
             bookmark.chapterIndex = chapterIndex;
-            bookmark.chapterTitle = chapter == null ? "" : chapter.title;
+            bookmark.chapterTitle = isFreeBrowse() ? "自由浏览" : (chapter == null ? "" : chapter.title);
             bookmark.percent = novel.percentOfBlock(currentBlock);
-            String pagePreview = buildPageText(pages.get(pageIndex)).replace('\n', ' ').trim();
-            bookmark.snippet = TextUtil.shortTitle(pagePreview, 46);
+            String preview;
+            if (isFreeBrowse()) {
+                int position = freeList == null ? 0 : Math.max(0, freeList.getFirstVisiblePosition());
+                int paragraphIndex = freeAdapter == null ? 0 : freeAdapter.paragraphAt(position);
+                preview = novel.paragraphText(paragraphIndex);
+            } else {
+                preview = pages.isEmpty() ? "" : buildPageText(pages.get(pageIndex));
+            }
+            bookmark.snippet = TextUtil.shortTitle(preview == null ? "" : preview.replace('\n', ' ').trim(), 46);
             store.saveBookmark(bookmark);
             Ui.toast(this, "已添加书签");
         }
@@ -1348,11 +1810,11 @@ public class ReaderActivity extends Activity {
     // ---------------- 菜单 / 目录 / 设置 ----------------
 
     private void showMenuSheet() {
+        String modeLabel = "阅读模式：原文分页 / 双语对照 / 自由浏览";
         final String[] items = {
                 "目录", "书签列表", "翻译设置", "阅读设置", "导出译文",
-                "复制本页译文", "切换译文语种", "切换原文语种",
-                "显示/隐藏本页译文", "重翻本页",
-                isBilingual() ? "切换为原文模式" : "切换为双语对照模式（原文在上·译文在下）",
+                "复制当前译文", "切换译文语种", "切换原文语种",
+                "显示/隐藏译文面板", "重翻当前范围", modeLabel,
                 book.favorite ? "取消收藏" : "加入收藏夹"
         };
         Ui.sheet(this, "阅读菜单", items, index -> {
@@ -1370,21 +1832,41 @@ public class ReaderActivity extends Activity {
                     else openPanel();
                     break;
                 case 9: translatePage(true); break;
-                case 10: toggleReadingMode(); break;
+                case 10: showReadingModePicker(); break;
                 case 11: toggleFavorite(); break;
                 default: break;
             }
         });
     }
 
-    /** 在“原文模式”和“双语对照（原文在上、译文在下）”之间切换。 */
-    private void toggleReadingMode() {
-        boolean toBilingual = !isBilingual();
-        store.setReadingMode(toBilingual ? "bilingual" : "original");
+    private void showReadingModePicker() {
+        String[] options = {
+                "原文分页模式（左右滑动翻页）",
+                "双语对照分页（原文在上 · 译文在下）",
+                "自由浏览（无章节 · 上下滑动连续阅读）"
+        };
+        String mode = store.getReadingMode();
+        int selected = "bilingual".equals(mode) ? 1 : ("scroll".equals(mode) ? 2 : 0);
+        Ui.listDialog(this, "阅读模式", options, selected, index ->
+                applyReadingMode(index == 1 ? "bilingual" : (index == 2 ? "scroll" : "original")));
+    }
+
+    private void applyReadingMode(String mode) {
+        String old = store.getReadingMode();
+        if (mode.equals(old)) return;
+        if ("scroll".equals(old)) captureFreePosition();
+        store.setReadingMode(mode);
         if (panelVisible) closePanel();
         applyModeVisibility();
-        renderPage(true);
-        Ui.toast(this, toBilingual ? "已切换到双语对照：原文在上，译文在下" : "已切换到原文模式");
+        if ("scroll".equals(mode)) {
+            freeNeedsScroll = true;
+            setupFreeBrowse();
+            Ui.toast(this, "已切换到自由浏览：上下滑动连续阅读");
+        } else {
+            paginate();
+            Ui.toast(this, "已切换到" + ("bilingual".equals(mode) ? "双语对照" : "原文分页") + "模式");
+        }
+        updateBottomButtons();
     }
 
     private void showToc() {
@@ -1521,18 +2003,24 @@ public class ReaderActivity extends Activity {
         });
         box.addView(indentRow);
 
-        Switch bilingualSwitch = Ui.toggle(this, isBilingual());
-        LinearLayout bilingualRow = Ui.settingRow(this, "双语对照",
-                "原文在上 · 译文在下，译文流式回填，方便逐段核对质量", bilingualSwitch);
-        bilingualSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            store.setReadingMode(isChecked ? "bilingual" : "original");
-            dialog.dismiss();
-            if (panelVisible) closePanel();
-            applyModeVisibility();
-            renderPage(true);
-            Ui.toast(this, isChecked ? "已开启双语对照模式" : "已切换回原文模式");
-        });
-        box.addView(bilingualRow);
+        box.addView(Ui.label(this, "阅读模式"));
+        LinearLayout modeRow = Ui.horizontal(this);
+        String[] modeLabels = {"原文分页", "双语对照", "自由浏览"};
+        String[] modeValues = {"original", "bilingual", "scroll"};
+        for (int i = 0; i < modeLabels.length; i++) {
+            final String modeValue = modeValues[i];
+            TextView chip = Ui.chip(this, modeLabels[i]);
+            Ui.chipSelected(chip, modeValue.equals(store.getReadingMode()));
+            chip.setOnClickListener(v -> {
+                dialog.dismiss();
+                applyReadingMode(modeValue);
+            });
+            LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+            if (i > 0) mp.leftMargin = Ui.dp(this, 6);
+            modeRow.addView(chip, mp);
+        }
+        box.addView(modeRow);
 
         LinearLayout actions = Ui.horizontal(this);
         actions.setPadding(0, Ui.dp(this, 10), 0, 0);
@@ -1610,11 +2098,21 @@ public class ReaderActivity extends Activity {
             bilingualStatus.setTextColor(Ui.alpha(store.getTextColor(), 170));
             bilingualContainer.setBackgroundColor(bg);
         }
+        if (freeStatus != null) freeStatus.setTextColor(Ui.alpha(store.getTextColor(), 170));
+        if (freeList != null) freeList.setBackgroundColor(bg);
         applyModeVisibility();
         updateBarStyle();
         updatePageLabels();
         if (isBilingual() && !pages.isEmpty()) {
             renderBilingualPage();
+        } else if (isFreeBrowse()) {
+            // 初次加载时交给 paginate() 在布局完成后建立列表并恢复滚动位置，
+            // 这里只刷新已有列表，避免提前消耗 freeNeedsScroll 导致回到开头。
+            if (freeAdapter != null) {
+                freeAdapter.notifyDataSetChanged();
+                updateFreeLabels();
+                updateFreeStatus();
+            }
         }
         if (panelVisible) {
             renderPanelCards();
@@ -1785,33 +2283,20 @@ public class ReaderActivity extends Activity {
         if (initialHintShown) return;
         initialHintShown = true;
         android.content.SharedPreferences prefs = getSharedPreferences("yidu_ui", MODE_PRIVATE);
-        if (prefs.getBoolean("reader_hint_v1", false)) return;
-        prefs.edit().putBoolean("reader_hint_v1", true).apply();
+        if (prefs.getBoolean("reader_hint_v2", false)) return;
+        prefs.edit().putBoolean("reader_hint_v2", true).apply();
         main.postDelayed(() -> {
             if (isFinishing()) return;
             Ui.sheet(this, "阅读提示", new String[]{
-                    "点击屏幕左侧 / 右侧：上一页 / 下一页",
-                    "点击屏幕中间：显示或隐藏菜单",
-                    "底部「翻译」：流式翻译本页",
-                    "底部「重翻」：丢弃本页译文重新翻译",
-                    "底部「自动」：翻页后自动翻译",
-                    "底部「Aa」：字号 / 背景 / 文字颜色"
+                    "向左滑动屏幕：下一页（带翻页动画）",
+                    "向右滑动屏幕：上一页",
+                    "点击屏幕：显示或隐藏菜单",
+                    "底部「翻译」：分页模式译本页，自由浏览译当前屏幕",
+                    "底部「自动」：翻页/滚动后自动翻译当前范围",
+                    "底部「Aa」→ 阅读模式：原文分页 / 双语对照 / 自由浏览"
             }, index -> {
             });
         }, 500);
-    }
-
-    @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            nextPage();
-            return true;
-        }
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            prevPage();
-            return true;
-        }
-        return super.onKeyDown(keyCode, event);
     }
 
     @Override
@@ -1832,6 +2317,7 @@ public class ReaderActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (novel == null) return;
+        translations.setPunctuationPreserve(store.isPunctuationPreserve());
         String signature = styleSignature();
         if (!signature.equals(styleSignature)) {
             styleSignature = signature;
@@ -1847,13 +2333,14 @@ public class ReaderActivity extends Activity {
         return store.getFontSize() + "|" + store.getFontFamily() + "|" + store.getTextColor()
                 + "|" + store.getBgColor() + "|" + store.getLineSpacing() + "|"
                 + store.isParagraphSpacing() + "|" + store.isIndent()
-                + "|" + store.getReadingMode();
+                + "|" + store.isPunctuationPreserve() + "|" + store.getReadingMode();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        saveProgress();
+        if (isFreeBrowse()) captureFreePosition();
+        else saveProgress();
     }
 
     @Override
@@ -1869,5 +2356,105 @@ public class ReaderActivity extends Activity {
     public void onConfigurationChanged(android.content.res.Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         main.postDelayed(this::applyStyleAndRepaginate, 150);
+    }
+
+    /** 自由浏览的虚拟列表：每段原文一行，译文在该行下方；无章节/页码。 */
+    private class FreeBrowseAdapter extends BaseAdapter {
+        private final List<Integer> paragraphRows = new ArrayList<>();
+
+        FreeBrowseAdapter() {
+            for (int i = 0; i < novel.paragraphs.size(); i++) {
+                String text = novel.paragraphs.get(i);
+                if (text != null && !text.trim().isEmpty()) paragraphRows.add(i);
+            }
+        }
+
+        int paragraphAt(int position) {
+            if (paragraphRows.isEmpty()) return 0;
+            int safe = Math.max(0, Math.min(paragraphRows.size() - 1, position));
+            return paragraphRows.get(safe);
+        }
+
+        int rowOfParagraph(int paragraphIndex) {
+            int index = Collections.binarySearch(paragraphRows, paragraphIndex);
+            return index >= 0 ? index : 0;
+        }
+
+        @Override
+        public int getCount() {
+            return paragraphRows.size();
+        }
+
+        @Override
+        public Object getItem(int position) {
+            return paragraphAt(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            Holder holder;
+            if (convertView == null) {
+                LinearLayout row = Ui.vertical(ReaderActivity.this);
+                row.setPadding(0, Ui.dp(ReaderActivity.this, 2), 0, Ui.dp(ReaderActivity.this, 14));
+                TextView original = new TextView(ReaderActivity.this);
+                original.setIncludeFontPadding(false);
+                original.setTextIsSelectable(false);
+                row.addView(original, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                TextView translation = new TextView(ReaderActivity.this);
+                translation.setIncludeFontPadding(false);
+                translation.setVisibility(View.GONE);
+                LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                tp.topMargin = Ui.dp(ReaderActivity.this, 5);
+                row.addView(translation, tp);
+                holder = new Holder(original, translation);
+                row.setTag(holder);
+                convertView = row;
+            } else {
+                holder = (Holder) convertView.getTag();
+            }
+            bindFreeRow(holder, paragraphAt(position));
+            return convertView;
+        }
+
+        private void bindFreeRow(Holder holder, int paragraphIndex) {
+            boolean dark = isDark(store.getBgColor());
+            int translationColor = dark ? 0xFF7DD3C7 : 0xFF0F766E;
+            int translationBg = dark ? 0xFF22302F : 0xFFF1F7F4;
+            holder.original.setText(novel.paragraphText(paragraphIndex));
+            holder.original.setTextSize(store.getFontSize());
+            holder.original.setTextColor(store.getTextColor());
+            holder.original.setLineSpacing(0, store.getLineSpacing());
+            applyTextTypeface(holder.original);
+            String translated = translationTextForParagraph(paragraphIndex);
+            if (translated.isEmpty()) {
+                holder.translation.setVisibility(View.GONE);
+            } else {
+                holder.translation.setVisibility(View.VISIBLE);
+                holder.translation.setText(translated);
+                holder.translation.setTextSize(Math.max(12.5f, store.getFontSize() * 0.88f));
+                holder.translation.setTextColor(translationColor);
+                holder.translation.setLineSpacing(Ui.dp(ReaderActivity.this, 2), 1.45f);
+                holder.translation.setPadding(Ui.dp(ReaderActivity.this, 10), Ui.dp(ReaderActivity.this, 7),
+                        Ui.dp(ReaderActivity.this, 10), Ui.dp(ReaderActivity.this, 7));
+                holder.translation.setBackground(Ui.round(ReaderActivity.this, translationBg, 8));
+            }
+        }
+
+        private class Holder {
+            final TextView original;
+            final TextView translation;
+
+            Holder(TextView original, TextView translation) {
+                this.original = original;
+                this.translation = translation;
+            }
+        }
     }
 }

@@ -36,8 +36,6 @@ public class SettingsActivity extends BaseActivity {
 
     private static final String[] FAMILIES = {"serif", "sans", "mono"};
     private static final String[] FAMILY_LABELS = {"宋体", "黑体", "等宽"};
-    private static final String[] TURN_MODES = {"tap", "swipe", "volume"};
-    private static final String[] TURN_LABELS = {"点击左右", "滑动", "音量键"};
 
     private boolean firstResume = true;
 
@@ -156,7 +154,8 @@ public class SettingsActivity extends BaseActivity {
 
         Switch punctuation = Ui.toggle(this, store.isPunctuationPreserve());
         punctuation.setOnCheckedChangeListener((buttonView, checked) -> store.setPunctuationPreserve(checked));
-        card.addView(Ui.settingRow(this, "保留原文标点", "尽量维持原文的标点与格式", punctuation));
+        card.addView(Ui.settingRow(this, "保留原文标点",
+                "尽量维持原文的标点与格式；已有缓存译文也会按此开关即时套用", punctuation));
         card.addView(Ui.divider(this));
 
         List<Glossary> glossaries = store.getGlossaries();
@@ -200,8 +199,8 @@ public class SettingsActivity extends BaseActivity {
         card.addView(Ui.section(this, "阅读设置"));
 
         card.addView(navRow("阅读模式",
-                store.isBilingualReading() ? "双语对照：原文在上、译文在下，译文流式回填" : "原文模式：整页原文分页阅读",
-                store.isBilingualReading() ? "双语对照" : "原文模式",
+                readingModeDescription(),
+                readingModeLabel(),
                 this::pickReadingMode));
         card.addView(Ui.divider(this));
 
@@ -326,27 +325,8 @@ public class SettingsActivity extends BaseActivity {
         indent.setOnCheckedChangeListener((buttonView, checked) -> store.setIndent(checked));
         card.addView(Ui.settingRow(this, "首行缩进", "每段开头缩进两个字符", indent));
 
-        // 翻页方式
-        card.addView(Ui.label(this, "翻页方式"));
-        LinearLayout turnRow = Ui.horizontal(this);
-        final TextView[] turnChips = new TextView[TURN_MODES.length];
-        for (int i = 0; i < TURN_MODES.length; i++) {
-            final int index = i;
-            TextView chip = Ui.chip(this, TURN_LABELS[i]);
-            turnChips[i] = chip;
-            Ui.chipSelected(chip, TURN_MODES[i].equals(store.getPageTurnMode()));
-            chip.setOnClickListener(v -> {
-                store.setPageTurnMode(TURN_MODES[index]);
-                for (int j = 0; j < turnChips.length; j++) {
-                    Ui.chipSelected(turnChips[j], j == index);
-                }
-            });
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1);
-            if (i > 0) p.setMargins(dp(6), 0, 0, 0);
-            turnRow.addView(chip, p);
-        }
-        card.addView(turnRow);
+        card.addView(Ui.hint(this,
+                "翻页：在页面上向左滑动进入下一页，向右滑动返回上一页；自由浏览模式下上下滑动即可连续阅读。"));
         return card;
     }
 
@@ -356,12 +336,31 @@ public class SettingsActivity extends BaseActivity {
     }
 
     private void pickReadingMode() {
-        String[] options = {"原文模式", "双语对照（原文在上 · 译文在下）"};
-        int selected = store.isBilingualReading() ? 1 : 0;
+        String[] options = {
+                "原文分页模式",
+                "双语对照分页（原文在上 · 译文在下）",
+                "自由浏览（无章节 · 上下滚动阅读）"
+        };
+        int selected = "bilingual".equals(store.getReadingMode()) ? 1
+                : ("scroll".equals(store.getReadingMode()) ? 2 : 0);
         Ui.listDialog(this, "阅读模式", options, selected, index -> {
-            store.setReadingMode(index == 1 ? "bilingual" : "original");
+            store.setReadingMode(index == 1 ? "bilingual" : (index == 2 ? "scroll" : "original"));
             render();
         });
+    }
+
+    private String readingModeLabel() {
+        String mode = store.getReadingMode();
+        if ("bilingual".equals(mode)) return "双语对照";
+        if ("scroll".equals(mode)) return "自由浏览";
+        return "原文分页";
+    }
+
+    private String readingModeDescription() {
+        String mode = store.getReadingMode();
+        if ("bilingual".equals(mode)) return "原文在上、译文在下，便于核对翻译质量";
+        if ("scroll".equals(mode)) return "没有章节和页码，上下滑动连续阅读，按当前屏幕范围翻译";
+        return "整页原文分页阅读，左右滑动翻页";
     }
 
     private boolean isDark(int color) {

@@ -2,7 +2,7 @@
 
 ## 结论
 
-- 测试项：**186 项**，**PASS 186 / FAIL 0**（`RESULT: PASS`，进程退出码 0）
+- 测试项：**204 项**，**PASS 204 / FAIL 0**（`RESULT: PASS`，进程退出码 0）
 - 未修改 `app/` 下任何源码、`build.ps1`、`README`；未运行 `build.ps1`；未连接真机。
 - 写文件范围仅 `tools/qa-core/`、`tools/lib/`。
 
@@ -29,6 +29,7 @@ $jdk = '.tools\jdk\jdk-17.0.21+9'
   app/java/com/yidu/novel/util/Lang.java `
   app/java/com/yidu/novel/net/StreamJsonParser.java `
   app/java/com/yidu/novel/net/PromptBuilder.java `
+  app/java/com/yidu/novel/net/PunctuationPreserver.java `
   app/java/com/yidu/novel/net/OutputGuard.java `
   app/java/com/yidu/novel/net/TokenEstimator.java `
   tools/qa-core/CoreHarness.java
@@ -53,11 +54,12 @@ $jdk = '.tools\jdk\jdk-17.0.21+9'
 | Novel.parse（超长段落/空段落/分页） | 12 | 全部 PASS |
 | StreamJsonParser.parsePartial | 11 | 全部 PASS |
 | StreamJsonParser.parseFinal | 8 | 全部 PASS |
+| PunctuationPreserver | 18 | 全部 PASS |
 | PromptBuilder | 36 | 全部 PASS |
 | Exporter | 31 | 全部 PASS |
 | OutputGuard | 9 | 全部 PASS |
 | TokenEstimator | 10 | 全部 PASS |
-| **合计** | **186** | **PASS 186 / FAIL 0** |
+| **合计** | **204** | **PASS 204 / FAIL 0** |
 
 ### 关键验证点
 
@@ -100,11 +102,11 @@ $jdk = '.tools\jdk\jdk-17.0.21+9'
 2. Exporter fallback 用例行号映射错位（`fallbackLines[2]` 对应第 3 个非空段落，值是“译2”）。
 3. OutputGuard 重复行用例的行长 20 字 < 24 字阈值，未触发规则；加长到 30 字后符合预期。
 
-修正后 186 项全部 PASS。
+修正后 204 项全部 PASS。
 
 ## 文件
 
-- `tools/qa-core/CoreHarness.java` — 测试主体（186 断言 + 1 附加观察）
+- `tools/qa-core/CoreHarness.java` — 测试主体（204 断言 + 1 附加观察）
 - `tools/qa-core/last-run.log` — 最近一次完整运行输出
 - `tools/qa-core/classes/` — 编译产物（app 源码类 + qa.CoreHarness）
 - `tools/lib/json-20240303.jar` — org.json 官方 jar

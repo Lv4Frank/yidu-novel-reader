@@ -58,7 +58,6 @@ public final class AppStore {
                     .putFloat("line_spacing", 1.55f)
                     .putBoolean("paragraph_spacing", true)
                     .putBoolean("indent", true)
-                    .putString("page_turn", "tap")
                     .apply();
         }
         if (getPrompts().isEmpty()) {
@@ -584,14 +583,6 @@ public final class AppStore {
         prefs.edit().putBoolean("indent", value).apply();
     }
 
-    public String getPageTurnMode() {
-        return prefs.getString("page_turn", "tap");
-    }
-
-    public void setPageTurnMode(String mode) {
-        prefs.edit().putString("page_turn", mode).apply();
-    }
-
     public int getExportMode() {
         return prefs.getInt("export_mode", 0);
     }
@@ -600,17 +591,23 @@ public final class AppStore {
         prefs.edit().putInt("export_mode", mode).apply();
     }
 
-    /** 阅读模式：original = 仅原文；bilingual = 原文在上、译文在下的双语对照。 */
+    /** 阅读模式：original = 原文分页；bilingual = 双语对照分页；scroll = 自由浏览（连续滚动）。 */
     public String getReadingMode() {
         String mode = prefs.getString("reading_mode", "original");
-        return "bilingual".equals(mode) ? "bilingual" : "original";
+        if ("bilingual".equals(mode) || "scroll".equals(mode)) return mode;
+        return "original";
     }
 
     public void setReadingMode(String mode) {
-        prefs.edit().putString("reading_mode", "bilingual".equals(mode) ? "bilingual" : "original").apply();
+        String value = "bilingual".equals(mode) || "scroll".equals(mode) ? mode : "original";
+        prefs.edit().putString("reading_mode", value).apply();
     }
 
     public boolean isBilingualReading() {
         return "bilingual".equals(getReadingMode());
+    }
+
+    public boolean isFreeBrowseReading() {
+        return "scroll".equals(getReadingMode());
     }
 }

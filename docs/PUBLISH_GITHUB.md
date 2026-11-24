@@ -61,7 +61,7 @@ git status
 1. 安装 https://desktop.github.com/ 并登录 GitHub 账号。
 2. **File → Add local repository** → 选择 `C:\AI工作区\txt实时翻译apk`。
 3. 左侧会显示已暂存的新文件；填写提交信息，例如：
-   `YiDuNovel 1.1.0: TXT novel reader with streaming LLM translation`
+   `YiDuNovel 1.2.1: deterministic punctuation preservation for streaming LLM translation`
    点 **Commit to main**。
 4. 顶部点 **Publish repository** → 选择仓库名（如 `yidu-novel-reader`）、是否 Public、是否忽略大文件（无需勾选）→ **Publish repository**。
 5. 完成第 3 步的 Release 上传。
@@ -76,7 +76,7 @@ git status
 cd "C:\AI工作区\txt实时翻译apk"
 git config user.name  "你的名字"
 git config user.email "你的GitHub邮箱"
-git commit -m "YiDuNovel 1.1.0: TXT novel reader with streaming LLM translation"
+git commit -m "YiDuNovel 1.2.1: deterministic punctuation preservation for streaming LLM translation"
 git branch -M main
 ```
 
@@ -106,20 +106,20 @@ gh repo create <仓库名> --public --source=. --remote=origin --push
 仓库源码里不提交 APK。请在 GitHub 上：
 
 1. 打开仓库 → 右侧 **Releases** → **Draft a new release**
-2. **Choose a tag**：输入 `v1.1.0` → Create new tag
-3. **Release title**：`v1.1.0 · 双语对照阅读模式`
+2. **Choose a tag**：输入 `v1.2.1` → Create new tag
+3. **Release title**：`v1.2.1 · 修复保留原文标点失效`
 4. 描述可以直接粘贴 [`RELEASE_NOTES.md`](../RELEASE_NOTES.md) 的内容
 5. **Attach binaries**：上传
-   - `YiDuNovel-1.1.0.apk`
-   - `YiDuNovel-1.1.0.apk.sha256`（可选，方便校验）
+   - `YiDuNovel-1.2.1.apk`
+   - `YiDuNovel-1.2.1.apk.sha256`（可选，方便校验）
 6. 点 **Publish release**
 
 > 如果你用 GitHub CLI：
 > ```powershell
-> gh release create v1.1.0 `
->   YiDuNovel-1.1.0.apk `
->   YiDuNovel-1.1.0.apk.sha256 `
->   --title "v1.1.0 · 双语对照阅读模式" `
+> gh release create v1.2.1 `
+>   YiDuNovel-1.2.1.apk `
+>   YiDuNovel-1.2.1.apk.sha256 `
+>   --title "v1.2.1 · 修复保留原文标点失效" `
 >   --notes-file RELEASE_NOTES.md
 > ```
 

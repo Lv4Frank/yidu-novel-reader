@@ -4,6 +4,7 @@ import com.yidu.novel.model.Book;
 import com.yidu.novel.model.PromptProfile;
 import com.yidu.novel.net.OutputGuard;
 import com.yidu.novel.net.PromptBuilder;
+import com.yidu.novel.net.PunctuationPreserver;
 import com.yidu.novel.net.StreamJsonParser;
 import com.yidu.novel.net.TokenEstimator;
 import com.yidu.novel.util.Defaults;
@@ -50,6 +51,7 @@ public final class CoreHarness {
         run("StreamJsonParser.parsePartial", CoreHarness::testStreamPartial);
         run("StreamJsonParser.parseFinal", CoreHarness::testStreamFinal);
         run("PromptBuilder", CoreHarness::testPromptBuilder);
+        run("PunctuationPreserver", CoreHarness::testPunctuationPreserver);
         run("Exporter", CoreHarness::testExporter);
         run("OutputGuard", CoreHarness::testOutputGuard);
         run("TokenEstimator", CoreHarness::testTokenEstimator);
@@ -415,6 +417,50 @@ public final class CoreHarness {
         check("buildUser 含上文参考", user.contains("【上文参考（仅帮助理解，不要翻译）】") && user.contains("上一段内容"), "");
         check("buildUser 编号原文", user.contains("1. 甲段") && user.contains("2. 乙段"), "");
         check("buildUser 要求 JSON 数组", user.contains("请按 JSON 数组格式输出 2 段译文。"), "");
+
+        String inventory = PunctuationPreserver.inventory("「你好」……——〜・《书》！？");
+        String hinted = PromptBuilder.buildSystem("基础提示", "ja", "zh-CN", "", true,
+                inventory, 1, null);
+        check("标点提示包含原文实际标点清单", !inventory.isEmpty() && hinted.contains(inventory), "inventory=" + inventory);
+        check("标点提示包含逐字沿用要求", hinted.contains("译文必须逐字沿用这些标点"), "");
+    }
+
+    private static void testPunctuationPreserver() {
+        section = "PunctuationPreserver";
+
+        String jpSource = "「おはよう」……そう言った——本当に〜・《本》！？";
+        String jpWrong = "“早上好”...そう言った--本当に~·《本》!?";
+        String jpExpected = "「早上好」……そう言った——本当に〜・《本》！？";
+        eq("日文引号/省略号/破折号/波浪号/间隔号/书名号/全角感叹问号",
+                jpExpected, PunctuationPreserver.apply(jpSource, jpWrong));
+        eq("重复应用保持幂等", jpExpected, PunctuationPreserver.apply(jpSource, jpExpected));
+
+        eq("日文嵌套引号", "「外『内』外」",
+                PunctuationPreserver.apply("「外『内』外」", "“外‘内’外”"));
+        eq("日文横线 U+2500 样式保留", "「──」",
+                PunctuationPreserver.apply("「──」", "「--」"));
+        eq("长破折号样式保留", "「——」",
+                PunctuationPreserver.apply("「——」", "「──」"));
+        eq("英文直引号保留为 ASCII", "\"你好，\"她说...",
+                PunctuationPreserver.apply("\"Hello,\" she said...", "“你好，”她说……"));
+        eq("英文撇号不被当作引号", "\"It's fine.\"",
+                PunctuationPreserver.apply("\"It's fine.\"", "“It's fine.”"));
+        eq("书名号样式保留", "〈书〉",
+                PunctuationPreserver.apply("〈书〉", "《书》"));
+        eq("单问号全角样式保留", "真的？",
+                PunctuationPreserver.apply("本当？", "真的?"));
+        eq("原文无特殊标点时不改动", "你好，世界。",
+                PunctuationPreserver.apply("普通文本", "你好，世界。"));
+        eq("原文无引号时译文引号保持原样", "他说“你好”",
+                PunctuationPreserver.apply("他说你好", "他说“你好”"));
+        eq("不完整引号也能转换", "「未完",
+                PunctuationPreserver.apply("「未完", "“未完"));
+
+        String inventory = PunctuationPreserver.inventory(jpSource);
+        check("标点清单含「」", inventory.contains("「」"), "inventory=" + inventory);
+        check("标点清单含省略号", inventory.contains("……"), "inventory=" + inventory);
+        check("标点清单含破折号", inventory.contains("——"), "inventory=" + inventory);
+        eq("无特殊标点时清单为空", "", PunctuationPreserver.inventory("普通文本"));
     }
 
     private static void testExporter() {

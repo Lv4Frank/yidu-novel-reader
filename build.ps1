@@ -1,6 +1,6 @@
 ﻿param(
     [switch]$SkipSign,
-    [string]$OutName = "YiDuNovel-1.1.0.apk",
+    [string]$OutName = "YiDuNovel-1.2.1.apk",
     [string]$JdkPath = "",
     [string]$SdkPath = "",
     [string]$KeystorePath = "",

@@ -188,9 +188,12 @@ public class TranslationEngine {
         int expected = todo.size();
         String glossary = store.glossaryPrompt(1600);
         String chapterTitle = novel.chapterTitleOfBlock(todo.get(0));
+        boolean preservePunctuation = store.isPunctuationPreserve();
+        String punctuationHint = preservePunctuation
+                ? PunctuationPreserver.inventory(concat(texts)) : "";
         String system = PromptBuilder.buildSystem(prompt == null ? "" : prompt.content,
-                sourceLang, store.getTargetLang(), glossary, store.isPunctuationPreserve(),
-                expected, chapterTitle);
+                sourceLang, store.getTargetLang(), glossary, preservePunctuation,
+                punctuationHint, expected, chapterTitle);
         String user = PromptBuilder.buildUser(texts, context);
 
         int requestMax = api.unlimitedOutput ? 0 : Math.max(64, api.maxOutputTokens);
@@ -228,8 +231,10 @@ public class TranslationEngine {
                             String value = parsed.items.get(emitted[0]).trim();
                             int index = todo.get(emitted[0]);
                             if (!value.isEmpty()) {
+                                // 存原始模型输出，显示/导出时按当前开关动态套用标点风格，
+                                // 这样切换「保留原文标点」后旧译文也能立即生效。
                                 translations.put(index, novel.blocks.get(index).text, value);
-                                listener.onBlockDone(index, value);
+                                listener.onBlockDone(index, displayPunctuation(index, value));
                             }
                             emitted[0]++;
                         }
@@ -290,7 +295,7 @@ public class TranslationEngine {
             if (value.isEmpty()) continue;
             if (!translations.has(index, novel.blocks.get(index).text)) {
                 translations.put(index, novel.blocks.get(index).text, value);
-                listener.onBlockDone(index, value);
+                listener.onBlockDone(index, displayPunctuation(index, value));
             }
         }
         for (Integer index : todo) {
@@ -322,6 +327,12 @@ public class TranslationEngine {
         result.done = alreadySaved;
         result.failed = remaining;
         return result;
+    }
+
+    private String displayPunctuation(int index, String value) {
+        if (!store.isPunctuationPreserve()) return value;
+        String source = novel.blocks.get(index).text;
+        return PunctuationPreserver.apply(source, value);
     }
 
     private List<List<Integer>> planBatches(List<Integer> blocks) {

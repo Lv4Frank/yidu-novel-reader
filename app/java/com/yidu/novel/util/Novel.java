@@ -192,4 +192,33 @@ public class Novel {
         if (blocks.isEmpty()) return 0;
         return Math.max(0, Math.min(100, (int) Math.round(block * 100.0 / blocks.size())));
     }
+
+    /** 某段的第一个翻译块下标；空段落返回 -1。 */
+    public int firstBlockOfParagraph(int paragraphIndex) {
+        int low = 0;
+        int high = blocks.size() - 1;
+        int answer = -1;
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            if (blocks.get(mid).paragraphIndex < paragraphIndex) {
+                low = mid + 1;
+            } else {
+                answer = mid;
+                high = mid - 1;
+            }
+        }
+        if (answer >= 0 && blocks.get(answer).paragraphIndex == paragraphIndex) return answer;
+        return -1;
+    }
+
+    public List<Integer> blockIndexesOfParagraph(int paragraphIndex) {
+        List<Integer> result = new ArrayList<>();
+        int first = firstBlockOfParagraph(paragraphIndex);
+        if (first < 0) return result;
+        for (int i = first; i < blocks.size(); i++) {
+            if (blocks.get(i).paragraphIndex != paragraphIndex) break;
+            result.add(i);
+        }
+        return result;
+    }
 }

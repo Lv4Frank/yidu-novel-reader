@@ -27,6 +27,7 @@ Thumbs.db
 
 # ---- Development / test artifacts ----
 screenshots/
+backup/
 ui.xml
 tools/mock_requests.log
 tools/qa-core/classes/
